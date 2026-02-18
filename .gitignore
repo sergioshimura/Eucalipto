@@ -1,0 +1,18 @@
+# Ambiente virtual
+venv/
+
+# Arquivos gerados em runtime
+data/data.json
+data/roi_config.json
+static/live.jpg
+detector_stdout.log
+detector_stderr.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Modelos YOLO (arquivos grandes - adicione manualmente se quiser versionar)
+*.pt
+*.onnx

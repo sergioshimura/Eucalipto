@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SISTEMA DE IRRIGAÇÃO SELETIVA LINEAR</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>SISTEMA DE IRRIGAÇÃO SELETIVA LINEAR</h1>
+        
+        <div class="main-content">
+            <!-- Live View Section -->
+            <div class="live-view">
+                <h2>Câmera ao Vivo</h2>
+                <div class="image-container">
+                    <img id="live-feed" src="{{ url_for('static', filename='live.jpg') }}?{{ data.get('timestamp', 0) }}" alt="Live camera feed">
+                    <div id="roi-selection" class="roi-selection"></div>
+                </div>
+                <div class="roi-buttons">
+                    <button id="save-roi-button">Salvar ROI</button>
+                    <button id="clear-roi-button">Limpar ROI</button>
+                </div>
+                <div class="action-buttons">
+                    <button type="submit" form="controls-form">Iniciar Detecção</button>
+                    <button type="button" id="stop-button">Parar Detecção</button>
+                    <button type="button" id="manual-valve-button">Pulso manual</button>
+                </div>
+            </div>
+
+            <!-- Data and Controls Section -->
+            <div class="data-and-controls">
+                <!-- Data Display -->
+				<div class="data-display data-display-3col">
+					<div class="data-item">
+						<p>Mudas</p>
+						<p id="seedlingcount">{{ data.get('seedlingcount', 0) }}</p>
+					</div>
+					<div class="data-item">
+						<p>Tanque</p>
+						<p id="tankvolume">{{ data.get('tankvolume', 100) }} L</p>
+					</div>
+					<div class="data-item">
+						<p>Velocidade</p>
+						<p id="tractorspeed">{{ "%.2f"|format(data.get('tractorspeed', 0.0)) }} km/h</p>
+					</div>
+				</div>
+                <!-- Parameter Controls -->
+                <div class="param-controls">
+                    <h2>Controles</h2>
+                    <div id="detector_status" class="status-stopped">
+                        Status: <strong>PARADO</strong>
+                    </div>
+                    <div id="pll-sync-alert" style="display:none; background-color:#c0392b; color:white; padding:10px; margin:8px 0; border-radius:4px; font-weight:bold; text-align:center;">
+                        &#9888; PERDA DE SINCRONISMO — 3 detecções consecutivas não recebidas
+                    </div>
+                    
+                    <form id="controls-form">
+                        <div class="form-group">
+                            <label for="delay">Atraso para o acionamento da válvula (ms)</label>
+                            <input type="number" id="delay" name="delay" value="100" min="0">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="distancia">Distância média entre mudas (m)</label>
+                            <input type="number" id="distancia" name="distancia" value="2.0" min="0.1" step="0.1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="volume_tanque">Volume inicial do tanque (L)</label>
+                            <input type="number" id="volume_tanque" name="volume_tanque" value="100" min="1" step="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="volume_irrigacao">Volume por irrigação (L)</label>
+                            <input type="number" id="volume_irrigacao" name="volume_irrigacao" value="5" min="0.1" step="0.1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="max_corr">Limite de correção PLL (%)</label>
+                            <input type="number" id="max_corr" name="max_corr" value="10" min="1" max="100" step="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="model">Modelo</label>
+                            <select id="model" name="model">
+                                <option value="balanced">Balanced</option>
+                                <option value="fast">Fast</option>
+                                <option value="onnx">ONNX</option>
+                                <option value="int8">ONNX-INT8</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="sensitivity">Sensibilidade <span id="sensitivity-value">50</span>%</label>
+                            <input type="range" id="sensitivity" name="sensitivity" min="0.1" max="1" step="0.05" value="0.5">
+                        </div>
+                        
+                        <div class="form-group">
+                            <input type="checkbox" id="showwindow" name="showwindow">
+                            <label for="showwindow">Exibir janela no terminal</label>
+                        </div>
+                        
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Element references
+        const form = document.getElementById('controls-form');
+        const stopButton = document.getElementById('stop-button');
+        const manualValveButton = document.getElementById('manual-valve-button'); // New manual valve button
+        const statusDiv = document.getElementById('detector_status');
+        const sensitivitySlider = document.getElementById('sensitivity');
+        const sensitivityValue = document.getElementById('sensitivity-value');
+        const saveRoiButton = document.getElementById('save-roi-button');
+        const clearRoiButton = document.getElementById('clear-roi-button');
+
+        // ROI Selection Elements
+        const imageContainer = document.querySelector('.image-container');
+        const liveFeedImage = document.getElementById('live-feed');
+        const roiSelectionDiv = document.getElementById('roi-selection');
+        
+        let isDrawing = false;
+        let isDrawingOrMovingRoi = false; // Flag to prevent fetchData from resetting ROI while drawing
+        let startX, startY;
+        let currentROI = { x: 0, y: 0, width: 0, height: 0 }; // Stores normalized ROI (0-1)
+
+        // --- Unified Drawing Logic for Mouse and Touch ---
+        function handleDrawStart(e) {
+            const rect = imageContainer.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+            isDrawing = true;
+            isDrawingOrMovingRoi = true; // Set flag
+            startX = clientX - rect.left;
+            startY = clientY - rect.top;
+
+            roiSelectionDiv.style.left = startX + 'px';
+            roiSelectionDiv.style.top = startY + 'px';
+            roiSelectionDiv.style.width = '0px';
+            roiSelectionDiv.style.height = '0px';
+            roiSelectionDiv.style.display = 'block';
+        }
+
+        function handleDrawMove(e) {
+            if (!isDrawing) return;
+            e.preventDefault(); // Prevent page scroll on touch devices
+
+            const rect = imageContainer.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            
+            let currentX = clientX - rect.left;
+            let currentY = clientY - rect.top;
+            
+            // Clamp to container boundaries
+            currentX = Math.max(0, Math.min(currentX, imageContainer.clientWidth));
+            currentY = Math.max(0, Math.min(currentY, imageContainer.clientHeight));
+
+            const newX = Math.min(startX, currentX);
+            const newY = Math.min(startY, currentY);
+            const newWidth = Math.abs(startX - currentX);
+            const newHeight = Math.abs(startY - currentY);
+            
+            roiSelectionDiv.style.left = newX + 'px';
+            roiSelectionDiv.style.top = newY + 'px';
+            roiSelectionDiv.style.width = newWidth + 'px';
+            roiSelectionDiv.style.height = newHeight + 'px';
+        }
+
+        function handleDrawEnd() {
+            if (!isDrawing) return;
+            
+            isDrawing = false;
+            setTimeout(() => { isDrawingOrMovingRoi = false; }, 100);
+
+			const roiLeft  = parseFloat(roiSelectionDiv.style.left);
+			const roiTop   = parseFloat(roiSelectionDiv.style.top);
+			const roiWidth = parseFloat(roiSelectionDiv.style.width);
+			const roiHeight= parseFloat(roiSelectionDiv.style.height);
+
+			if (roiWidth >= 1 && roiHeight >= 1) {
+				const imgDisplayWidth  = liveFeedImage.offsetWidth;
+				const imgDisplayHeight = liveFeedImage.offsetHeight;
+
+				currentROI = {
+					x: roiLeft  / imgDisplayWidth,
+					y: roiTop   / imgDisplayHeight,
+					width: roiWidth  / imgDisplayWidth,
+					height: roiHeight / imgDisplayHeight
+				};
+
+				console.log('ROI selecionada (frações da imagem exibida):', currentROI);
+				showToast(`ROI selecionada (${(currentROI.x*100).toFixed(1)}%, ${(currentROI.y*100).toFixed(1)}%, ${(currentROI.width*100).toFixed(1)}%, ${(currentROI.height*100).toFixed(1)}%)`);
+			} else {
+				roiSelectionDiv.style.display = 'none';
+				currentROI = { x: 0, y: 0, width: 0, height: 0 };
+				showToast('Área de ROI inválida.', true);
+			}
+        }
+
+        // Mouse Events
+        imageContainer.addEventListener('mousedown', handleDrawStart);
+        imageContainer.addEventListener('mousemove', handleDrawMove);
+        window.addEventListener('mouseup', handleDrawEnd); // Use window to catch mouseup outside the container
+
+        // Touch Events
+        imageContainer.addEventListener('touchstart', handleDrawStart);
+        imageContainer.addEventListener('touchmove', handleDrawMove);
+        window.addEventListener('touchend', handleDrawEnd); // Use window to catch touchend outside the container
+
+
+        // Save ROI Button Listener
+		saveRoiButton.addEventListener('click', () => {
+			if (currentROI.width > 0 && currentROI.height > 0) {
+				showToast('Enviando ROI para o servidor...', false);
+				console.log('ROI normalizada enviada para o backend:', currentROI);
+
+				fetch('/set_roi', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(currentROI)
+				})
+				.then(response => response.json())
+				.then(data => {
+					showToast(data.message, data.status === 'error');
+					fetchData(); // recarrega ROI do backend
+				})
+				.catch(error => {
+					showToast('Erro ao salvar ROI: ' + error, true);
+				});
+			} else {
+				showToast('Por favor, selecione uma área de ROI válida (desenhe na imagem).', true);
+			}
+		});
+
+
+        // Clear ROI Button Listener
+        clearRoiButton.addEventListener('click', () => {
+            showToast('Limpando ROI...', false);
+            fetch('/clear_roi', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    showToast(data.message, data.status === 'error');
+                    fetchData(); // Refresh UI
+                })
+                .catch(error => {
+                    showToast('Erro ao limpar ROI: ' + error, true);
+                });
+        });
+
+        // Existing Event Listeners
+        form.addEventListener('submit', function(event) {
+            event.preventDefault();
+            const formData = new FormData(this);
+            showToast('Iniciando detector...');
+            fetch('/start', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                showToast(data.message, data.status === 'error');
+                fetchData(); // Atualiza o status imediatamente
+            });
+        });
+
+        stopButton.addEventListener('click', function() {
+            showToast('Parando detector...');
+            fetch('/stop', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                showToast(data.message, data.status === 'error');
+                fetchData(); // Atualiza o status imediatamente
+            });
+        });
+
+        manualValveButton.addEventListener('click', function() {
+            showToast('Ativando válvula manualmente...', false);
+            fetch('/manual_valve', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    showToast(data.message, data.status === 'error');
+                })
+                .catch(error => {
+                    showToast('Erro ao ativar a válvula: ' + error, true);
+                });
+        });
+
+        sensitivitySlider.addEventListener('input', () => {
+            const percentage = Math.round(sensitivitySlider.value * 100);
+            sensitivityValue.textContent = percentage;
+        });
+
+        // DOM Content Loaded
+        document.addEventListener('DOMContentLoaded', () => {
+            const initialPercentage = Math.round(sensitivitySlider.value * 100);
+            sensitivityValue.textContent = initialPercentage;
+            fetchData();
+        });
+
+        // Update Functions
+		function fetchData() {
+			fetch('/get_data')
+				.then(response => response.json())
+				.then(data => {
+					document.getElementById('seedlingcount').textContent = data.seedlingcount;
+					document.getElementById('tankvolume').textContent = data.tankvolume + ' L';
+					document.getElementById('tractorspeed').textContent = data.tractorspeed.toFixed(2) + ' km/h';
+
+					const status = data.detector_status;
+					let statusText = 'Parado';
+					if (status && status.running) {
+						const confidence = Math.round(status.sensitivity * 100);
+						statusText = `Rodando (Modo: ${status.mode}, Confiança: ${confidence}%)`;
+						statusDiv.className = 'status-running';
+					} else {
+						statusDiv.className = 'status-stopped';
+					}
+					statusDiv.innerHTML = `Status: <strong>${statusText.toUpperCase()}</strong>`;
+
+					// Alerta de perda de sincronismo do PLL
+					const pllAlert = document.getElementById('pll-sync-alert');
+					if (data.pll_sync_lost) {
+						pllAlert.style.display = 'block';
+					} else {
+						pllAlert.style.display = 'none';
+					}
+
+					if (data.saved_roi && !isDrawingOrMovingRoi) {
+						displayROI(data.saved_roi);
+					}
+				});
+		}
+
+        function updateImage() {
+            const img = document.getElementById('live-feed');
+            img.src = `{{ url_for('static', filename='live.jpg') }}?${new Date().getTime()}`;
+        }
+
+        function displayROI(normalizedRoi) {
+            if (normalizedRoi && normalizedRoi.width > 0 && normalizedRoi.height > 0) {
+                const imgDisplayWidth = liveFeedImage.offsetWidth;
+                const imgDisplayHeight = liveFeedImage.offsetHeight;
+                
+                const displayX = normalizedRoi.x * imgDisplayWidth;
+                const displayY = normalizedRoi.y * imgDisplayHeight;
+                const displayWidth = normalizedRoi.width * imgDisplayWidth;
+                const displayHeight = normalizedRoi.height * imgDisplayHeight;
+                
+                roiSelectionDiv.style.left = displayX + 'px';
+                roiSelectionDiv.style.top = displayY + 'px';
+                roiSelectionDiv.style.width = displayWidth + 'px';
+                roiSelectionDiv.style.height = displayHeight + 'px';
+                roiSelectionDiv.style.display = 'block';
+                
+                // currentROI stores normalized values, not pixel values
+				currentROI = { ...normalizedRoi };
+            } else {
+                roiSelectionDiv.style.display = 'none';
+                currentROI = { x: 0, y: 0, width: 0, height: 0 };
+            }
+        }
+
+        function showToast(message, isError = false) {
+            const existingToast = document.querySelector('.toast');
+            if (existingToast) existingToast.remove();
+
+            const toast = document.createElement('div');
+            toast.textContent = message;
+            toast.className = 'toast';
+            if (isError) toast.style.backgroundColor = '#c0392b';
+            
+            document.body.appendChild(toast);
+            // CSS handles fade-out animation
+            setTimeout(() => {
+                if (toast.parentElement) toast.remove();
+            }, 3000);
+        }
+
+        // Start Loops
+        setInterval(fetchData, 2000);
+        setInterval(updateImage, 250);
+    </script></body>
+</html>
