@@ -21,7 +21,8 @@ O `app.py` gerencia o `detector_unificado.py` como subprocesso. Não execute o d
 
 ```
 Linear/
-├── app.py                    # Servidor Flask — inicia/para detector, serve interface
+├── app.py                    # Servidor Flask — inicia/para detector, serve interface; integra Modbus
+├── modbus_server.py          # Servidor Modbus RTU serial para HMI WECON PI3070ig
 ├── detector_unificado.py     # Loop de detecção YOLO + PLLController + GPIO
 ├── gpio_handler.py           # Utilitário standalone para testar GPIO
 ├── templates/index.html      # Interface web (câmera ao vivo, controles, alertas)
@@ -49,6 +50,14 @@ app.py (Flask)
   ├── POST /clear_roi → remove roi_config.json
   └── POST /manual_valve → aciona GPIO diretamente
 
+modbus_server.py (thread daemon no mesmo processo Flask)
+  ├── _CallbackBlock  → ModbusSequentialDataBlock com hook de escrita do HMI
+  ├── ModbusRTUServer
+  │     ├── _handle_write() → processa comandos do HMI (start/stop/válvula)
+  │     ├── _update_loop()  → thread: lê data.json a cada 0.5s → atualiza registradores
+  │     └── _run_loop()     → asyncio em thread separada: servidor serial RTU
+  └── Integração via callbacks injetados pelo app.py
+
 detector_unificado.py (subprocesso)
   ├── StreamThread    → captura RTSP em thread separada (grab+retrieve)
   ├── PLLController   → gerador de pulsos sincronizado com detecções
@@ -58,6 +67,7 @@ detector_unificado.py (subprocesso)
 ```
 
 **Comunicação app ↔ detector:** arquivo `data/data.json` (escrito pelo detector, lido pelo Flask a cada `/get_data`).
+**Comunicação Pi ↔ HMI:** Modbus RTU serial via USB-RS232 (`/dev/ttyUSB0`), slave ID=1, 9600 bps.
 
 ## PLLController — Comportamento
 
@@ -88,6 +98,30 @@ detector_unificado.py (subprocesso)
 - **Câmera:** IP `192.168.1.64`, streams RTSP canal 101 (main) e 102 (sub)
 - **GPIO:** chip 4 (Raspberry Pi 5), pino 17, válvula solenóide 200ms
 - **Fallback GPIO:** chip 0 se chip 4 falhar
+- **HMI:** WECON PI3070ig, 800×480, touch — software: PIStudio V9.5.9
+- **Serial:** conversor USB-RS232 em `/dev/ttyUSB0`, Modbus RTU slave ID=1, 9600 bps, 8-N-1
+
+## Modbus Register Map (Holding Registers)
+
+Índice no bloco (pymodbus 3.x aplica offset +1 internamente — HMI PIStudio usa 40000 + índice):
+
+| Índice | HMI | Descrição | Escala |
+|---|---|---|---|
+| 1 | 40001 | seedlingcount | x1 |
+| 2 | 40002 | tankvolume | x10 |
+| 3 | 40003 | tractorspeed | x10 |
+| 4 | 40004 | pll_sync_lost | 0/1 |
+| 5 | 40005 | pll_missed_count | x1 |
+| 6 | 40006 | pll_period | x100 |
+| 7 | 40007 | detector_running | 0/1 |
+| 11 | 40011 | comando (1=start, 2=stop, 3=válvula manual) | auto-reset para 0 |
+| 12 | 40012 | modo (0=fast, 1=balanced, 2=onnx, 3=int8) | x1 |
+| 13 | 40013 | limiar | x100 |
+| 14 | 40014 | delay | ms |
+| 15 | 40015 | distancia | x10 |
+| 16 | 40016 | volume_tanque | L |
+| 17 | 40017 | volume_irrigacao | x10 |
+| 18 | 40018 | max_corr | % |
 
 ## data.json Schema
 
@@ -105,6 +139,12 @@ detector_unificado.py (subprocesso)
 ```
 
 ## Session History
+
+### Session 2026-02-22
+- Phase: Modbus RTU integration complete — awaiting PIStudio configuration and Raspberry Pi deploy
+- Accomplishments: modbus_server.py created from scratch (ModbusRTUServer class with callback-based HMI command handling, async serial server, data.json sync loop); app.py integrated with Modbus server (import + instance + start in __main__); pymodbus 3.12.1 installed in venv; register map fully defined (7 read registers + 8 write registers); NameError bug on Pi identified (code on Pi is outdated, fix already present in Linear/app.py)
+- Key Decisions: Modbus RTU over RS232 (not Ethernet — camera uses the network port); pymodbus 3.12.1 uses ModbusDeviceContext not ModbusSlaveContext; register index is 1-based in the block (pymodbus applies +1 offset internally); command register auto-resets to 0 after processing; integration via injected callbacks to keep modbus_server.py independent of app.py
+- Next Steps: Install PIStudio V9.5.9 on Windows PC; create HMI project for PI3070ig; deploy updated code to Raspberry Pi (git pull + pip install pymodbus); test Modbus communication between Pi and HMI via USB-RS232
 
 ### Session 2026-02-18
 - Phase: Implementation complete — ready for field testing

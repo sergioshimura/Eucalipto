@@ -4,8 +4,13 @@ import subprocess
 import os
 import atexit
 import signal
+from modbus_server import ModbusRTUServer
 
 app = Flask(__name__)
+
+# --- MODBUS RTU (HMI WECON PI3070ig via USB-RS232) ---
+# Porta serial: /dev/ttyUSB0 (Linux) — ajuste se necessário
+modbus = ModbusRTUServer(port='/dev/ttyUSB0', baudrate=9600)
 
 # --- GERENCIAMENTO DE PROCESSO ---
 detector_process = None
@@ -283,7 +288,16 @@ def manual_valve_route():
 if __name__ == '__main__':
     # Garante que o processo do detector seja parado quando a aplicação Flask for encerrada
     atexit.register(cleanup_detector)
-    
+
+    # Inicia servidor Modbus RTU para HMI (daemon thread — não bloqueia o Flask)
+    modbus.on_start = start_detector
+    modbus.on_stop = cleanup_detector
+    modbus.on_valve = lambda: __import__('subprocess').run(
+        ['python3', 'gpio_handler.py'], capture_output=True
+    )
+    modbus.get_status = lambda: detector_status
+    modbus.start()
+
     # Inicia a aplicação Flask
     # use_reloader=False é importante para evitar que o atexit seja chamado em duplicidade durante o debug
     app.run(debug=True, host='0.0.0.0', use_reloader=False)
