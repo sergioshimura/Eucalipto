@@ -146,6 +146,15 @@ detector_unificado.py (subprocesso)
 - Key Decisions: Modbus RTU over RS232 (not Ethernet — camera uses the network port); pymodbus 3.12.1 uses ModbusDeviceContext not ModbusSlaveContext; register index is 1-based in the block (pymodbus applies +1 offset internally); command register auto-resets to 0 after processing; integration via injected callbacks to keep modbus_server.py independent of app.py
 - Next Steps: Install PIStudio V9.5.9 on Windows PC; create HMI project for PI3070ig; deploy updated code to Raspberry Pi (git pull + pip install pymodbus); test Modbus communication between Pi and HMI via USB-RS232
 
+### Session 2026-02-24
+- Phase: Bug fixes for Raspberry Pi deploy — HMI upload confirmed working
+- Accomplishments: Fixed 3 bugs in app.py and detector_unificado.py
+  1. `manual_valve_route` (app.py): removed direct lgpio usage and `from detector_unificado import activate_valve` (which would trigger model load + camera open on import); replaced with `subprocess.run(['python3','gpio_handler.py','on'])`, consistent with the Modbus path
+  2. `get_data_from_file()` (app.py): corrected fallback dict key names from `seedling_count`/`tank_volume`/`tractor_speed` to `seedlingcount`/`tankvolume`/`tractorspeed` (matching what detector writes and template reads)
+  3. `detector_unificado.py`: removed ~67 lines of duplicate module-level model+stream setup (lines 192–259) that ran at import time, causing the model to be loaded twice and the camera to be opened twice; `run_detector()` already has its own complete setup
+- Key Decisions: Manual valve from web and from HMI now both go through gpio_handler.py subprocess — no lgpio in app.py
+- Next Steps: git pull on Pi + pip install pymodbus (if not already) + python app.py; test full flow: web ROI → start/stop from web and HMI → Modbus register updates on display → manual valve from both interfaces
+
 ### Session 2026-02-23
 - Phase: HMI screen design complete in PIStudio — awaiting UDisk upload to HMI hardware
 - Accomplishments: PIStudio V9.5.9 installed on Windows PC (supports PI3070ig / ig series); Modbus RTU communication configured in PIStudio (COM1, RS232, 9600 bps, 8-N-1, Modbus RTU Slave All Function, Device No. 1); complete HMI screen created with monitoring section (seedlingcount 40001, tankvolume 40002/10, tractorspeed 40003/10, PLL period 40006/100, missed count 40005), Word Lamp indicators (SYNC OK/LOST on 40004, DETECTOR ON/OFF on 40007), configuration section (mode dropdown 40012, threshold 40013/100, delay 40014, distance 40015/10, tank volume 40016, irrigation volume 40017/10, max correction 40018), and action buttons (INICIAR writes 1 to 40011, PARAR writes 2 to 40011, PURGAR writes 3 to 40011); CP210x USB driver installed on Windows PC

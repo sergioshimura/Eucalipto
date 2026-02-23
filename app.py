@@ -229,60 +229,45 @@ def get_data_from_file(): # Renamed to avoid recursion
     """Lê os dados do arquivo JSON compartilhado."""
     if not os.path.exists(DATA_FILE):
         return {
-            "seedling_count": 0,
-            "tank_volume": 100,
-            "tractor_speed": 0.0,
-            "framewidth": 640, # Default if not found
-            "frameheight": 480 # Default if not found
+            "seedlingcount": 0,
+            "tankvolume": 100.0,
+            "tractorspeed": 0.0,
+            "framewidth": 640,
+            "frameheight": 480
         }
     try:
         with open(DATA_FILE, 'r') as f:
             data = json.load(f)
-            # Ensure framewidth/height defaults are present if file exists but lacks them
             data.setdefault("framewidth", 640)
             data.setdefault("frameheight", 480)
             return data
     except (json.JSONDecodeError, FileNotFoundError):
-        # Retorna dados padrão se o arquivo estiver vazio, corrompido ou não existir ainda
         return {
-            "seedling_count": 0,
-            "tank_volume": 100,
-            "tractor_speed": 0.0,
-            "framewidth": 640, # Default if file is corrupt
-            "frameheight": 480 # Default if file is corrupt
+            "seedlingcount": 0,
+            "tankvolume": 100.0,
+            "tractorspeed": 0.0,
+            "framewidth": 640,
+            "frameheight": 480
         }
 
 # --- ROTA PARA MODO MANUAL ---
 @app.route('/manual_valve', methods=['POST'])
 def manual_valve_route():
     """Ativa a válvula manualmente por um curto período."""
-    h = None
     try:
-        # Tenta abrir o GPIO da mesma forma que o detector_unificado.py
-        h = lgpio.gpiochip_open(4)
-        lgpio.gpio_claim_output(h, 17) # Pino 17
-        print("[INFO] GPIO chip 4 aberto para acionamento manual.", flush=True)
+        result = subprocess.run(
+            ['python3', 'gpio_handler.py', 'on'],
+            capture_output=True, timeout=5
+        )
+        if result.returncode == 0:
+            return jsonify({'status': 'success', 'message': 'Válvula ativada manualmente!'})
+        else:
+            err = result.stderr.decode().strip() or 'Erro ao acionar GPIO.'
+            print(f"[ERRO] gpio_handler.py retornou erro: {err}", flush=True)
+            return jsonify({'status': 'error', 'message': err})
     except Exception as e:
-        print(f"[AVISO] Falha ao abrir GPIO chip 4 para acionamento manual: {e}", flush=True)
-        try:
-            h = lgpio.gpiochip_open(0)
-            lgpio.gpio_claim_output(h, 17)
-            print("[INFO] GPIO chip 0 aberto para acionamento manual.", flush=True)
-        except Exception as e_inner:
-            print(f"[ERRO] Não foi possível abrir o GPIO para acionamento manual: {e_inner}", flush=True)
-            return jsonify({'status': 'error', 'message': 'Falha ao acessar GPIO.'})
-
-    try:
-        from detector_unificado import activate_valve
-        activate_valve(h, 17)
-        return jsonify({'status': 'success', 'message': 'Válvula ativada manualmente!'})
-    except Exception as e:
-        print(f"[ERRO] Falha ao chamar activate_valve: {e}", flush=True)
+        print(f"[ERRO] Falha ao acionar válvula manual: {e}", flush=True)
         return jsonify({'status': 'error', 'message': str(e)})
-    finally:
-        if h is not None:
-            lgpio.gpiochip_close(h)
-            print("[INFO] GPIO fechado após acionamento manual.", flush=True)
 
 # --- INICIALIZAÇÃO E LIMPEZA ---
 if __name__ == '__main__':
