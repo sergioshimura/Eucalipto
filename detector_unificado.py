@@ -15,6 +15,7 @@ import lgpio
 import json
 from threading import Thread, Lock, Timer
 import traceback
+import requests
 
 cv2.setNumThreads(0)
 print("DEBUG: Imports concluídos.", flush=True)
@@ -136,65 +137,87 @@ print("DEBUG: Configuração GPIO concluída. Handle:", h, flush=True)
 class StreamThread:
     def __init__(self, source, apipref=cv2.CAP_ANY):
         print(f"DEBUG: StreamThread Iniciando captura de {source}", flush=True)
-        self.source_url = source  # Guardar para possível reabertura
-        self.api_pref = apipref  # Guardar para possível reabertura
-        self.cap = cv2.VideoCapture(source, apipref)
-        print(f"DEBUG: StreamThread cv2.VideoCapture chamado. isOpened: {self.cap.isOpened}", flush=True)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # THREAD DE CAPTURA
-        print("DEBUG: StreamThread Buffer size definido.", flush=True)
+        self.source_url = source
+        self.api_pref = apipref
         self.success = False
         self.frame = None
-        # Removido self.cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000) # Timeout de 5 segundos para leitura
-
-        if self.cap.isOpened():
-            print("DEBUG: StreamThread Câmera aberta. Tentando ler frame inicial...", flush=True)
-            self.success, self.frame = self.cap.read()
-            print(f"DEBUG: StreamThread Leitura inicial do frame. Sucesso: {self.success}", flush=True)
-        else:
-            print("ERRO: StreamThread Falha ao abrir a câmera. Verifique a URL e a conectividade.", flush=True)
-
         self.stopped = False
         self.lock = Lock()
+        self._is_mjpeg_http = source.startswith('http://')
+        self.cap = None
+
+        if not self._is_mjpeg_http:
+            self.cap = cv2.VideoCapture(source, apipref)
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            if self.cap.isOpened():
+                print("DEBUG: StreamThread Câmera aberta. Lendo frame inicial...", flush=True)
+                self.success, self.frame = self.cap.read()
+                print(f"DEBUG: StreamThread Frame inicial. Sucesso: {self.success}", flush=True)
+            else:
+                print("ERRO: StreamThread Falha ao abrir câmera RTSP.", flush=True)
+        else:
+            print("DEBUG: StreamThread modo MJPEG HTTP ativado.", flush=True)
 
     def start(self):
-        Thread(target=self.update, daemon=True).start()
+        if self._is_mjpeg_http:
+            Thread(target=self._update_mjpeg, daemon=True).start()
+        else:
+            Thread(target=self._update_rtsp, daemon=True).start()
         return self
 
-    def update(self):
+    def _update_mjpeg(self):
+        """Lê stream MJPEG multipart/x-mixed-replace via HTTP."""
+        while not self.stopped:
+            try:
+                r = requests.get(self.source_url, stream=True, timeout=10)
+                buf = b''
+                for chunk in r.iter_content(chunk_size=4096):
+                    if self.stopped:
+                        break
+                    buf += chunk
+                    start = buf.find(b'\xff\xd8')  # início JPEG
+                    end   = buf.find(b'\xff\xd9')  # fim JPEG
+                    if start != -1 and end != -1:
+                        jpg = buf[start:end + 2]
+                        buf = buf[end + 2:]
+                        frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                        if frame is not None:
+                            with self.lock:
+                                self.frame = frame
+                                self.success = True
+            except Exception as e:
+                print(f"AVISO: StreamThread MJPEG erro: {e}. Reconectando...", flush=True)
+                time.sleep(1)
+
+    def _update_rtsp(self):
+        """Lê stream RTSP via OpenCV VideoCapture."""
         while not self.stopped:
             if not self.cap.isOpened():
-                print("AVISO: StreamThread Câmera não está aberta no update. Tentando reabrir...", flush=True)
-                self.cap = cv2.VideoCapture(self.source_url, self.api_pref)  # Tenta reabrir
-                time.sleep(1)  # Espera um pouco antes de tentar novamente
+                print("AVISO: StreamThread Câmera RTSP não aberta. Reabrindo...", flush=True)
+                self.cap = cv2.VideoCapture(self.source_url, self.api_pref)
+                time.sleep(1)
                 continue
-
-            # Tenta ler um frame para verificar se a câmera está funcionando
             grabbed = self.cap.grab()
-            if not grabbed:  # Usar grab+retrieve mais eficiente e robusto para streams RTSP
-                time.sleep(0.05)  # Pequena espera antes de tentar novamente
+            if not grabbed:
+                time.sleep(0.05)
                 continue
-
             success, frame = self.cap.retrieve()
             with self.lock:
                 self.success = success
                 if success:
                     self.frame = frame
                 else:
-                    if time.time() % 5 < 0.1:  # Para não ser muito verboso
-                        print("AVISO: StreamThread Falha ao recuperar frame (retrieve).", flush=True)
-                if not success:  # Se falhou, espera um pouco mais
                     time.sleep(0.05)
 
     def read(self):
         with self.lock:
             if not self.success:
-                print("AVISO: StreamThread.read Câmera não tem frames de sucesso. Retornando None.", flush=True)
                 return None
             return self.frame.copy()
 
     def stop(self):
         self.stopped = True
-        if self.cap.isOpened():
+        if self.cap is not None and self.cap.isOpened():
             self.cap.release()
         print("DEBUG: StreamThread Captura parada e liberada.", flush=True)
 
