@@ -95,7 +95,7 @@ detector_unificado.py (subprocesso)
 
 ## Hardware
 
-- **Câmera:** IP `192.168.1.64`, streams RTSP canal 101 (main) e 102 (sub)
+- **Câmera:** Wanscam JW0004, IP `192.168.15.12` (WiFi, mesma rede do Pi), porta HTTP 81, **sem RTSP** — stream MJPEG over HTTP: `http://192.168.15.12:81/videostream.cgi?user=admin&pwd=` (senha vazia)
 - **GPIO:** chip 4 (Raspberry Pi 5), pino 17, válvula solenóide 200ms
 - **Fallback GPIO:** chip 0 se chip 4 falhar
 - **HMI:** WECON PI3070ig, 800×480, touch — software: PIStudio V9.5.9

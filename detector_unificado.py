@@ -91,12 +91,22 @@ else:
     print("DEBUG: Nenhuma ROI ativa.", flush=True)
 
 # --- CONFIGURAÇÕES DA CÂMERA ---
-CAMIP = "192.168.1.64"
+
+# -- Hikvision (câmera anterior) --
+# CAMIP = "192.168.1.64"
+# USER = "admin"
+# PASS = "$S559612s$"
+# PASSESC = PASS.replace('$', '%24')
+# RTSPMAIN = f"rtsp://{USER}:{PASSESC}@{CAMIP}/Streaming/Channels/101"
+# RTSPSUB  = f"rtsp://{USER}:{PASSESC}@{CAMIP}/Streaming/Channels/102"
+
+# -- Wanscam JW0004 (câmera atual) — MJPEG over HTTP (sem RTSP) --
+CAMIP = "192.168.15.12"
 USER = "admin"
-PASS = "$S559612s$"
-PASSESC = PASS.replace('$', '%24')
-RTSPMAIN = f"rtsp://{USER}:{PASSESC}@{CAMIP}/Streaming/Channels/101"
-RTSPSUB = f"rtsp://{USER}:{PASSESC}@{CAMIP}/Streaming/Channels/102"
+PASS = ""
+STREAMURL = f"http://{CAMIP}:81/videostream.cgi?user={USER}&pwd={PASS}"
+RTSPMAIN  = STREAMURL
+RTSPSUB   = STREAMURL
 print("DEBUG: Configurações de câmera definidas.", flush=True)
 
 # --- GPIO E PARÂMETROS ---
