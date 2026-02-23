@@ -1,6 +1,6 @@
 # Sistema de Irrigação Seletiva Linear v1.0
 
-**Status:** Servidor Modbus RTU implementado — aguardando configuração HMI (PIStudio) e deploy no Raspberry Pi.
+**Status:** Tela HMI criada no PIStudio — aguardando geração do UDisk (WMT3/HMI V2.0) e upload ao PI3070ig.
 
 ## Descrição
 
@@ -32,4 +32,4 @@ python app.py
 
 ## Última Atualização
 
-2026-02-22
+2026-02-23

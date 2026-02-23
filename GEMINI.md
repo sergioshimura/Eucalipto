@@ -140,11 +140,17 @@ detector_unificado.py (subprocesso)
 
 ## Session History
 
-### Session 2026-02-22
+### Session 2026-02-22 (parte 1)
 - Phase: Modbus RTU integration complete — awaiting PIStudio configuration and Raspberry Pi deploy
 - Accomplishments: modbus_server.py created from scratch (ModbusRTUServer class with callback-based HMI command handling, async serial server, data.json sync loop); app.py integrated with Modbus server (import + instance + start in __main__); pymodbus 3.12.1 installed in venv; register map fully defined (7 read registers + 8 write registers); NameError bug on Pi identified (code on Pi is outdated, fix already present in Linear/app.py)
 - Key Decisions: Modbus RTU over RS232 (not Ethernet — camera uses the network port); pymodbus 3.12.1 uses ModbusDeviceContext not ModbusSlaveContext; register index is 1-based in the block (pymodbus applies +1 offset internally); command register auto-resets to 0 after processing; integration via injected callbacks to keep modbus_server.py independent of app.py
 - Next Steps: Install PIStudio V9.5.9 on Windows PC; create HMI project for PI3070ig; deploy updated code to Raspberry Pi (git pull + pip install pymodbus); test Modbus communication between Pi and HMI via USB-RS232
+
+### Session 2026-02-23
+- Phase: HMI screen design complete in PIStudio — awaiting UDisk upload to HMI hardware
+- Accomplishments: PIStudio V9.5.9 installed on Windows PC (supports PI3070ig / ig series); Modbus RTU communication configured in PIStudio (COM1, RS232, 9600 bps, 8-N-1, Modbus RTU Slave All Function, Device No. 1); complete HMI screen created with monitoring section (seedlingcount 40001, tankvolume 40002/10, tractorspeed 40003/10, PLL period 40006/100, missed count 40005), Word Lamp indicators (SYNC OK/LOST on 40004, DETECTOR ON/OFF on 40007), configuration section (mode dropdown 40012, threshold 40013/100, delay 40014, distance 40015/10, tank volume 40016, irrigation volume 40017/10, max correction 40018), and action buttons (INICIAR writes 1 to 40011, PARAR writes 2 to 40011, PURGAR writes 3 to 40011); CP210x USB driver installed on Windows PC
+- Key Decisions: PIStudio V9.5.9 confirmed compatible with PI3070ig (ig series); Word Lamp (not Bit Lamp) required for holding registers — Bit Lamp only works with coils; direct USB cable download does not work (Download button non-functional in PIStudio for this model); UDisk download via FAT32 pendrive is the correct method; UDisk format must be WMT3 using the "HMI V2.0" tab (not V1.0) inside PIStudio; PURGAR button = temporary manual valve trigger (equivalent to flush/purge)
+- Next Steps: Generate UDisk file in WMT3 format (HMI V2.0 tab) from PIStudio; copy to FAT32 pendrive; upload to PI3070ig via USB port; deploy updated code to Raspberry Pi (git pull + pip install pymodbus); connect USB-RS232 cable between Pi and HMI; test full Modbus communication loop
 
 ### Session 2026-02-18
 - Phase: Implementation complete — ready for field testing
