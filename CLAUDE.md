@@ -9,8 +9,12 @@ Sistema de Irrigação Seletiva Linear — detecção de mudas de eucalipto via 
 ## Running the Application
 
 ```bash
+# No PC de desenvolvimento:
 cd /home/sergio/Linear
-source venv/bin/activate   # ambiente virtual py313env na Raspberry Pi
+
+# Na Raspberry Pi (diretório diferente!):
+cd ~/yolo
+source venv/bin/activate
 python app.py
 # Acesso: http://<IP>:5000
 ```
