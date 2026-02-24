@@ -37,6 +37,9 @@ Linear/
 └── static/live.jpg           # Frame atual da câmera (gerado em runtime)
 ```
 
+Documentação HMI:
+- `Wecon-PI3070ig-programação.pptx` — guia de programação do HMI WECON PI3070ig (PIStudio, upload via Backstage, mapa de registradores)
+
 Modelos YOLO na raiz de `Linear/`:
 - `eucalipto_yolov8n.pt` — modo balanced (PyTorch)
 - `eucalipto_yolov8n.onnx` — modos fast/onnx
@@ -150,19 +153,23 @@ detector_unificado.py (subprocesso)
 - Key Decisions: Modbus RTU over RS232 (not Ethernet — camera uses the network port); pymodbus 3.12.1 uses ModbusDeviceContext not ModbusSlaveContext; register index is 1-based in the block (pymodbus applies +1 offset internally); command register auto-resets to 0 after processing; integration via injected callbacks to keep modbus_server.py independent of app.py
 - Next Steps: Install PIStudio V9.5.9 on Windows PC; create HMI project for PI3070ig; deploy updated code to Raspberry Pi (git pull + pip install pymodbus); test Modbus communication between Pi and HMI via USB-RS232
 
-### Session 2026-02-24
-- Phase: Bug fixes for Raspberry Pi deploy — HMI upload confirmed working
-- Accomplishments: Fixed 3 bugs in app.py and detector_unificado.py
-  1. `manual_valve_route` (app.py): removed direct lgpio usage and `from detector_unificado import activate_valve` (which would trigger model load + camera open on import); replaced with `subprocess.run(['python3','gpio_handler.py','on'])`, consistent with the Modbus path
-  2. `get_data_from_file()` (app.py): corrected fallback dict key names from `seedling_count`/`tank_volume`/`tractor_speed` to `seedlingcount`/`tankvolume`/`tractorspeed` (matching what detector writes and template reads)
-  3. `detector_unificado.py`: removed ~67 lines of duplicate module-level model+stream setup (lines 192–259) that ran at import time, causing the model to be loaded twice and the camera to be opened twice; `run_detector()` already has its own complete setup
-- Key Decisions: Manual valve from web and from HMI now both go through gpio_handler.py subprocess — no lgpio in app.py
-- Next Steps: git pull on Pi + pip install pymodbus (if not already) + python app.py; test full flow: web ROI → start/stop from web and HMI → Modbus register updates on display → manual valve from both interfaces
+### Session 2026-02-24 (parte 2 — diagnóstico e deploy Modbus)
+- Phase: Modbus RTU comunicação bidirecional confirmada — aguardando teste dos botões de controle
+- Accomplishments:
+  1. app.py copiado para Raspberry Pi (~/yolo) — versão com integração Modbus não estava na Pi
+  2. pymodbus e pyserial instalados no venv da Pi — dependências faltavam
+  3. Diagnóstico completo da falha Modbus: causa raiz foi cabo RS232 fisicamente solto; após reconectar, Pi recebe FC03 reads do HMI e responde corretamente; comunicação bidirecional confirmada via logs debug do pymodbus
+  4. PIStudio corrigido: botões INICIAR/PARAR/IRRIGAR reconfigurados com PLC Station No.=1 (antes estava como Default=0, causando envio de comandos para escravo ID=0 em vez de ID=1)
+  5. Procedimento de upload HMI via Backstage documentado (pressionar canto superior direito 3-4s)
+  6. modbus_server.py: logging revertido para WARNING (StreamHandler de debug removido antes do commit)
+- Key Decisions: Causa raiz de toda falha Modbus foi cabo solto — não software; PLC Station No. em Word Switch deve ser explicitamente 1, não "Default"; logs debug do pymodbus são úteis para diagnóstico mas devem ser revertidos para WARNING em produção
+- Next Steps: Testar botões INICIAR/PARAR/IRRIGAR após atualização do HMI com PIStudio corrigido (PLC Station No.=1); verificar se FC06 write chega ao Pi para cada botão; executar fluxo completo (start via HMI → detector rodando → registradores atualizando no display → válvula manual)
 
 ### Session 2026-02-23
 - Phase: HMI screen design complete in PIStudio — awaiting UDisk upload to HMI hardware
 - Accomplishments: PIStudio V9.5.9 installed on Windows PC (supports PI3070ig / ig series); Modbus RTU communication configured in PIStudio (COM1, RS232, 9600 bps, 8-N-1, Modbus RTU Slave All Function, Device No. 1); complete HMI screen created with monitoring section (seedlingcount 40001, tankvolume 40002/10, tractorspeed 40003/10, PLL period 40006/100, missed count 40005), Word Lamp indicators (SYNC OK/LOST on 40004, DETECTOR ON/OFF on 40007), configuration section (mode dropdown 40012, threshold 40013/100, delay 40014, distance 40015/10, tank volume 40016, irrigation volume 40017/10, max correction 40018), and action buttons (INICIAR writes 1 to 40011, PARAR writes 2 to 40011, PURGAR writes 3 to 40011); CP210x USB driver installed on Windows PC
 - Key Decisions: PIStudio V9.5.9 confirmed compatible with PI3070ig (ig series); Word Lamp (not Bit Lamp) required for holding registers — Bit Lamp only works with coils; direct USB cable download does not work (Download button non-functional in PIStudio for this model); UDisk download via FAT32 pendrive is the correct method; UDisk format must be WMT3 using the "HMI V2.0" tab (not V1.0) inside PIStudio; PURGAR button = temporary manual valve trigger (equivalent to flush/purge)
+- HMI Upload Procedure (PI3070ig Backstage mode): inserir pendrive FAT32 com arquivo .wmt3 na raiz → pressionar e segurar canto superior direito da tela por 3-4s até entrar no "Backstage" → selecionar idioma English → Finish → na barra direita escolher "Update" → aparece "HMI Project" com o novo projeto → selecionar e clicar Download. NOTA: o método UDisk do PIStudio apenas gera o arquivo no pendrive; o upload real é feito pelo Backstage do HMI. Se HMI diz "no update" ao inserir o pendrive normalmente, usar o Backstage.
 - Next Steps: Generate UDisk file in WMT3 format (HMI V2.0 tab) from PIStudio; copy to FAT32 pendrive; upload to PI3070ig via USB port; deploy updated code to Raspberry Pi (git pull + pip install pymodbus); connect USB-RS232 cable between Pi and HMI; test full Modbus communication loop
 
 ### Session 2026-02-18
