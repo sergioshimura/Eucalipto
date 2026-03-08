@@ -31,7 +31,8 @@ import os
 import time
 import logging
 
-logging.getLogger('pymodbus').setLevel(logging.WARNING)
+_pm_logger = logging.getLogger('pymodbus')
+_pm_logger.setLevel(logging.WARNING)
 
 try:
     from pymodbus.datastore import (
@@ -47,25 +48,27 @@ except ImportError:
 
 _DATA_FILE = os.path.join(os.path.dirname(__file__), 'data', 'data.json')
 _MODES = ['fast', 'balanced', 'onnx', 'int8']
-_NREGS = 20  # tamanho do bloco (índices 0-19)
+_NREGS = 21  # tamanho do bloco (índices 0-20, R_MAXCORR=19)
 
-# Índices no bloco (0-based, internos). O HMI usa 40001 + (índice - 1).
-R_SEEDLING   = 1
-R_TANK       = 2
-R_SPEED      = 3
-R_PLL_LOST   = 4
-R_PLL_MISSED = 5
-R_PLL_PERIOD = 6
-R_RUNNING    = 7
+# Índices no bloco. pymodbus 3.x adiciona +1 ao endereço PDU ao chamar
+# setValues/getValues, portanto cada índice = endereço_HMI - 40000 + 1.
+# Exemplo: HMI 40001 (PDU 1) → setValues/getValues com index 2.
+R_SEEDLING   = 2   # HMI 40001
+R_TANK       = 3   # HMI 40002
+R_SPEED      = 4   # HMI 40003
+R_PLL_LOST   = 5   # HMI 40004
+R_PLL_MISSED = 6   # HMI 40005
+R_PLL_PERIOD = 7   # HMI 40006
+R_RUNNING    = 8   # HMI 40007
 
-R_CMD        = 11   # HMI 40011
-R_MODE       = 12
-R_LIMIAR     = 13
-R_DELAY      = 14
-R_DISTANCIA  = 15
-R_VOLTANQUE  = 16
-R_VOLIRRG    = 17
-R_MAXCORR    = 18
+R_CMD        = 12  # HMI 40011
+R_MODE       = 13  # HMI 40012
+R_LIMIAR     = 14  # HMI 40013
+R_DELAY      = 15  # HMI 40014
+R_DISTANCIA  = 16  # HMI 40015
+R_VOLTANQUE  = 17  # HMI 40016
+R_VOLIRRG    = 18  # HMI 40017
+R_MAXCORR    = 19  # HMI 40018
 
 
 class _CallbackBlock(ModbusSequentialDataBlock):
@@ -103,6 +106,7 @@ class ModbusRTUServer:
         self._server = None
         self._loop = None
         self._running = False
+        self._last_cmd_time = 0  # cooldown para evitar comando repetido
 
         # Callbacks injetados pelo app.py
         self.on_start = None    # fn(**kwargs) inicia detector
@@ -129,8 +133,17 @@ class ModbusRTUServer:
 
     def _handle_write(self, address, value):
         """Chamado quando o HMI escreve um registrador. address = índice no bloco."""
+        if value != 0:
+            print(f"[MODBUS] Escrita do HMI: address={address} value={value}", flush=True)
         if address != R_CMD or value == 0:
             return
+
+        # Cooldown de 3s para evitar re-disparo enquanto botão HMI está pressionado
+        now = time.time()
+        if now - self._last_cmd_time < 3.0:
+            self._set_reg(R_CMD, 0)
+            return
+        self._last_cmd_time = now
 
         print(f"[MODBUS] Comando recebido do HMI: {value}", flush=True)
 
@@ -224,6 +237,16 @@ class ModbusRTUServer:
         self._block = _CallbackBlock(on_write=self._handle_write)
         store = ModbusDeviceContext(hr=self._block)
         self._context = ModbusServerContext(devices=store, single=True)
+
+        # Inicializa registradores de configuração com valores padrão
+        # (HMI pode sobrescrever antes de pressionar INICIAR)
+        self._set_reg(R_MODE,      1)    # balanced
+        self._set_reg(R_LIMIAR,   50)    # 0.50
+        self._set_reg(R_DELAY,   100)    # 100ms
+        self._set_reg(R_DISTANCIA, 20)   # 2.0m
+        self._set_reg(R_VOLTANQUE, 100)  # 100L
+        self._set_reg(R_VOLIRRG,   50)   # 5.0L
+        self._set_reg(R_MAXCORR,   20)   # 20%
 
         self._running = True
         threading.Thread(target=self._update_loop, daemon=True).start()

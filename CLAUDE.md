@@ -102,7 +102,8 @@ detector_unificado.py (subprocesso)
 
 ## Hardware
 
-- **Câmera:** Wanscam JW0004, IP `192.168.15.12` (WiFi, mesma rede do Pi), porta HTTP 81, **sem RTSP** — stream MJPEG over HTTP: `http://192.168.15.12:81/videostream.cgi?user=admin&pwd=` (senha vazia)
+- **Câmera:** Wanscam JW0004, IP `192.168.15.11` (WiFi, mesma rede do Pi), porta HTTP 81, **sem RTSP** — stream MJPEG over HTTP: `http://192.168.15.11:81/videostream.cgi?user=admin&pwd=` (senha vazia)
+- **Raspberry Pi:** IP `192.168.15.12`, diretório `~/yolo`, venv: `py313env`
 - **GPIO:** chip 4 (Raspberry Pi 5), pino 17, válvula solenóide 200ms
 - **Fallback GPIO:** chip 0 se chip 4 falhar
 - **HMI:** WECON PI3070ig, 800×480, touch — software: PIStudio V9.5.9
@@ -110,25 +111,27 @@ detector_unificado.py (subprocesso)
 
 ## Modbus Register Map (Holding Registers)
 
-Índice no bloco (pymodbus 3.x aplica offset +1 internamente — HMI PIStudio usa 40000 + índice):
+**IMPORTANTE — pymodbus 3.x offset:** pymodbus aplica `+1` ao endereço PDU ao chamar `setValues`/`getValues` no bloco. Por isso, os índices no código (constantes R_*) são sempre `PDU_address + 1`. O HMI PIStudio usa endereços 4xxxx (40001 = PDU 0 → índice no bloco = 1, mas pymodbus chama `setValues(2)` → R_SEEDLING = 2).
 
-| Índice | HMI | Descrição | Escala |
-|---|---|---|---|
-| 1 | 40001 | seedlingcount | x1 |
-| 2 | 40002 | tankvolume | x10 |
-| 3 | 40003 | tractorspeed | x10 |
-| 4 | 40004 | pll_sync_lost | 0/1 |
-| 5 | 40005 | pll_missed_count | x1 |
-| 6 | 40006 | pll_period | x100 |
-| 7 | 40007 | detector_running | 0/1 |
-| 11 | 40011 | comando (1=start, 2=stop, 3=válvula manual) | auto-reset para 0 |
-| 12 | 40012 | modo (0=fast, 1=balanced, 2=onnx, 3=int8) | x1 |
-| 13 | 40013 | limiar | x100 |
-| 14 | 40014 | delay | ms |
-| 15 | 40015 | distancia | x10 |
-| 16 | 40016 | volume_tanque | L |
-| 17 | 40017 | volume_irrigacao | x10 |
-| 18 | 40018 | max_corr | % |
+Mapa correto (constantes em modbus_server.py, confirmado em produção):
+
+| Constante | Índice bloco | PDU | HMI | Descrição | Escala |
+|---|---|---|---|---|---|
+| R_SEEDLING | 2 | 1 | 40001 | seedlingcount | x1 |
+| R_TANK | 3 | 2 | 40002 | tankvolume | x10 |
+| R_SPEED | 4 | 3 | 40003 | tractorspeed | x10 |
+| R_PLL_LOST | 5 | 4 | 40004 | pll_sync_lost | 0/1 |
+| R_PLL_MISSED | 6 | 5 | 40005 | pll_missed_count | x1 |
+| R_PLL_PERIOD | 7 | 6 | 40006 | pll_period | x100 |
+| R_RUNNING | 8 | 7 | 40007 | detector_running | 0/1 |
+| R_CMD | 12 | 11 | 40011 | comando (1=start, 2=stop, 3=válvula) | auto-reset 0 |
+| R_MODE | 13 | 12 | 40012 | modo (0=fast,1=balanced,2=onnx,3=int8) | x1 |
+| R_LIMIAR | 14 | 13 | 40013 | limiar | x100 |
+| R_DELAY | 15 | 14 | 40014 | delay | ms |
+| R_DISTANCIA | 16 | 15 | 40015 | distancia | x10 |
+| R_VOLTANQUE | 17 | 16 | 40016 | volume_tanque | L |
+| R_VOLIRRG | 18 | 17 | 40017 | volume_irrigacao | x10 |
+| R_MAXCORR | 19 | 18 | 40018 | max_corr | % |
 
 ## data.json Schema
 
@@ -152,6 +155,20 @@ detector_unificado.py (subprocesso)
 - Accomplishments: modbus_server.py created from scratch (ModbusRTUServer class with callback-based HMI command handling, async serial server, data.json sync loop); app.py integrated with Modbus server (import + instance + start in __main__); pymodbus 3.12.1 installed in venv; register map fully defined (7 read registers + 8 write registers); NameError bug on Pi identified (code on Pi is outdated, fix already present in Linear/app.py)
 - Key Decisions: Modbus RTU over RS232 (not Ethernet — camera uses the network port); pymodbus 3.12.1 uses ModbusDeviceContext not ModbusSlaveContext; register index is 1-based in the block (pymodbus applies +1 offset internally); command register auto-resets to 0 after processing; integration via injected callbacks to keep modbus_server.py independent of app.py
 - Next Steps: Install PIStudio V9.5.9 on Windows PC; create HMI project for PI3070ig; deploy updated code to Raspberry Pi (git pull + pip install pymodbus); test Modbus communication between Pi and HMI via USB-RS232
+
+### Session 2026-03-08 (parte 3 — fix offset Modbus e IPs)
+- Phase: Sistema totalmente funcional — INICIAR/PARAR via HMI confirmados; câmera aparecendo na web
+- Accomplishments:
+  1. IP da câmera atualizado: 192.168.15.11 (antes 192.168.15.12); Pi agora é 192.168.15.12
+  2. Câmera não aparecia na web: StreamThread estava com URL antiga (192.168.15.12) → corrigido para 192.168.15.11
+  3. Bug crítico Modbus corrigido: pymodbus 3.x adiciona +1 ao endereço PDU ao chamar setValues/getValues no bloco. R_CMD era 11 mas pymodbus chamava setValues(12) → callback verificava address==R_CMD (11) e retornava sem fazer nada. Corrigido incrementando todas as constantes R_* em +1 (R_CMD=12, R_SEEDLING=2, etc.) e _NREGS de 20 para 21
+  4. Detector iniciava com parâmetros zerados: registradores R_MODE..R_MAXCORR eram 0 antes do HMI escrever. Corrigido com inicialização de defaults em start()
+  5. Botão HMI pressionado → múltiplos INICIAR: adicionado cooldown de 3s em _handle_write
+  6. gpio_handler.py ausente na Pi (~/yolo): copiado via scp
+  7. venv da Pi é py313env, não venv/
+  8. Logging pymodbus revertido para WARNING (estava DEBUG para diagnóstico)
+- Key Decisions: pymodbus 3.x offset +1 é definitivo — todos os índices R_* devem ser PDU+1; INICIAR/PARAR via HMI confirmados em produção com parâmetros corretos; câmera e Pi têm IPs trocados em relação à sessão anterior
+- Next Steps: Testar botão IRRIGAR (valor=3) → gpio_handler.py pulso 200ms; verificar display HMI mostrando valores corretos dos registradores de leitura (seedlingcount, tankvolume etc.); teste de campo completo
 
 ### Session 2026-02-24 (parte 2 — diagnóstico e deploy Modbus)
 - Phase: Modbus RTU comunicação bidirecional confirmada — aguardando teste dos botões de controle
