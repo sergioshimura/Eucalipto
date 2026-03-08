@@ -102,7 +102,7 @@ else:
 # RTSPSUB  = f"rtsp://{USER}:{PASSESC}@{CAMIP}/Streaming/Channels/102"
 
 # -- Wanscam JW0004 (câmera atual) — MJPEG over HTTP (sem RTSP) --
-CAMIP = "192.168.15.12"
+CAMIP = "192.168.15.11"
 USER = "admin"
 PASS = ""
 STREAMURL = f"http://{CAMIP}:81/videostream.cgi?user={USER}&pwd={PASS}"
@@ -451,7 +451,8 @@ def run_detector(args):
                 if h is not None:
                     lgpio.gpio_write(h, VALVEPIN, 0)
                 if framecounter % 20 == 0:
-                    print(f"AVISO: Aguardando frame... Modo {args.mode}. isOpened: {stream.cap.isOpened}. "
+                    is_opened = stream.cap.isOpened() if stream.cap is not None else "N/A (MJPEG)"
+                    print(f"AVISO: Aguardando frame... Modo {args.mode}. isOpened: {is_opened}. "
                           f"Sucesso anterior do StreamThread: {stream.success}", flush=True)
                 time.sleep(0.1)
                 framecounter += 1
