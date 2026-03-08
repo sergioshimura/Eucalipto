@@ -278,7 +278,7 @@ if __name__ == '__main__':
     modbus.on_start = start_detector
     modbus.on_stop = cleanup_detector
     modbus.on_valve = lambda: __import__('subprocess').run(
-        ['python3', 'gpio_handler.py'], capture_output=True
+        ['python3', 'gpio_handler.py', 'on'], capture_output=True
     )
     modbus.get_status = lambda: detector_status
     modbus.start()
