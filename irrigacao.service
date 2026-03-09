@@ -1,0 +1,17 @@
+[Unit]
+Description=Sistema de Irrigação Seletiva Linear
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sergio
+WorkingDirectory=/home/sergio/yolo
+ExecStart=/home/sergio/yolo/py313env/bin/python app.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

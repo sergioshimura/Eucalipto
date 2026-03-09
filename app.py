@@ -72,10 +72,21 @@ def cleanup_detector():
 
 def start_detector(mode='balanced', sensitivity='0.5', delay='0.1', show=False,
                    distancia='2.0', volume_tanque='100', volume_irrigacao='5',
-                   max_corr='10'):
+                   max_corr='10', resume=False):
     """Inicia o processo do detector com os parâmetros fornecidos."""
     global detector_process, detector_status
     cleanup_detector() # Garante que qualquer processo antigo seja parado
+
+    saved = get_data_from_file()
+    agua_inicial     = saved.get('agua_consumida', 0.0) if resume else 0.0
+    seedling_inicial = saved.get('seedlingcount', 0)    if resume else 0
+    period_inicial   = saved.get('pll_period', 2.0)    if resume else 2.0
+
+    if not resume:
+        saved['agua_consumida'] = 0.0
+        saved['seedlingcount']  = 0
+        with open(DATA_FILE, 'w') as f:
+            json.dump(saved, f)
 
     command = [
         "python3", "detector_unificado.py",
@@ -85,7 +96,10 @@ def start_detector(mode='balanced', sensitivity='0.5', delay='0.1', show=False,
         "--distancia", str(distancia),
         "--volume_tanque", str(volume_tanque),
         "--volume_irrigacao", str(volume_irrigacao),
-        "--max_corr", str(max_corr)
+        "--max_corr", str(max_corr),
+        "--agua_consumida_inicial", str(agua_inicial),
+        "--seedlingcount_inicial", str(seedling_inicial),
+        "--pll_period_inicial", str(period_inicial)
     ]
     if show:
         command.append("--show")
@@ -175,6 +189,29 @@ def start_route():
         print(f"[ERRO] Falha ao iniciar o detector: {e}")
         return jsonify({'status': 'error', 'message': str(e)})
 
+@app.route('/retomar', methods=['POST'])
+def retomar_route():
+    try:
+        delay = request.form.get('delay', '100')
+        model = request.form.get('model', 'balanced')
+        sensitivity = request.form.get('sensitivity', '0.5')
+        showwindow = request.form.get('showwindow')
+        distancia = request.form.get('distancia', '2.5')
+        volume_tanque = request.form.get('volume_tanque', '100')
+        volume_irrigacao = request.form.get('volume_irrigacao', '5')
+        max_corr = request.form.get('max_corr', '10')
+        delay_sec = str(float(delay) / 1000.0)
+        start_detector(
+            mode=model, sensitivity=sensitivity, delay=delay_sec,
+            show=bool(showwindow), distancia=distancia,
+            volume_tanque=volume_tanque, volume_irrigacao=volume_irrigacao,
+            max_corr=max_corr, resume=True
+        )
+        return jsonify({'status': 'success', 'message': f'Detector retomado no modo {model}.'})
+    except Exception as e:
+        print(f"[ERRO] Falha ao retomar o detector: {e}")
+        return jsonify({'status': 'error', 'message': str(e)})
+
 @app.route('/stop', methods=['POST'])
 def stop_route():
     try:
@@ -225,12 +262,23 @@ def get_data_route():
     data['saved_roi'] = load_roi_config() # Include saved ROI in data
     return jsonify(data)
 
+def _increment_agua_consumida():
+    """Incrementa agua_consumida em data.json (usado quando detector está OFF)."""
+    try:
+        vol = modbus._reg(18) / 10.0  # R_VOLIRRG=18, escala ×10
+    except Exception:
+        vol = 5.0
+    data = get_data_from_file()
+    data['agua_consumida'] = round(data.get('agua_consumida', 0.0) + vol, 2)
+    with open(DATA_FILE, 'w') as f:
+        json.dump(data, f)
+
 def get_data_from_file(): # Renamed to avoid recursion
     """Lê os dados do arquivo JSON compartilhado."""
     if not os.path.exists(DATA_FILE):
         return {
             "seedlingcount": 0,
-            "tankvolume": 100.0,
+            "agua_consumida": 0.0,
             "tractorspeed": 0.0,
             "framewidth": 640,
             "frameheight": 480
@@ -244,7 +292,7 @@ def get_data_from_file(): # Renamed to avoid recursion
     except (json.JSONDecodeError, FileNotFoundError):
         return {
             "seedlingcount": 0,
-            "tankvolume": 100.0,
+            "agua_consumida": 0.0,
             "tractorspeed": 0.0,
             "framewidth": 640,
             "frameheight": 480
@@ -255,16 +303,19 @@ def get_data_from_file(): # Renamed to avoid recursion
 def manual_valve_route():
     """Ativa a válvula manualmente por um curto período."""
     try:
+        if detector_status.get('running'):
+            open(os.path.join(DATA_DIR, 'valve_trigger'), 'w').close()
+            return jsonify({'status': 'success', 'message': 'Válvula ativada manualmente!'})
         result = subprocess.run(
             ['python3', 'gpio_handler.py', 'on'],
             capture_output=True, timeout=5
         )
         if result.returncode == 0:
+            _increment_agua_consumida()
             return jsonify({'status': 'success', 'message': 'Válvula ativada manualmente!'})
-        else:
-            err = result.stderr.decode().strip() or 'Erro ao acionar GPIO.'
-            print(f"[ERRO] gpio_handler.py retornou erro: {err}", flush=True)
-            return jsonify({'status': 'error', 'message': err})
+        err = result.stderr.decode().strip() or 'Erro ao acionar GPIO.'
+        print(f"[ERRO] gpio_handler.py retornou erro: {err}", flush=True)
+        return jsonify({'status': 'error', 'message': err})
     except Exception as e:
         print(f"[ERRO] Falha ao acionar válvula manual: {e}", flush=True)
         return jsonify({'status': 'error', 'message': str(e)})
@@ -275,11 +326,17 @@ if __name__ == '__main__':
     atexit.register(cleanup_detector)
 
     # Inicia servidor Modbus RTU para HMI (daemon thread — não bloqueia o Flask)
-    modbus.on_start = start_detector
-    modbus.on_stop = cleanup_detector
-    modbus.on_valve = lambda: __import__('subprocess').run(
-        ['python3', 'gpio_handler.py', 'on'], capture_output=True
-    )
+    modbus.on_start   = start_detector
+    modbus.on_retomar = lambda **kw: start_detector(**kw, resume=True)
+    modbus.on_stop    = cleanup_detector
+    def _do_valve():
+        if detector_status.get('running'):
+            open(os.path.join(DATA_DIR, 'valve_trigger'), 'w').close()
+        else:
+            result = subprocess.run(['python3', 'gpio_handler.py', 'on'], capture_output=True)
+            if result.returncode == 0:
+                _increment_agua_consumida()
+    modbus.on_valve = _do_valve
     modbus.get_status = lambda: detector_status
     modbus.start()
 

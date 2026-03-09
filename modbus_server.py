@@ -7,7 +7,7 @@ Mapa de Holding Registers (pymodbus 3.x aplica offset +1 internamente):
   Índice no bloco  PDU Modbus  HMI (PIStudio)  Descrição
   ─────────────────────────────────────────────────────────
   1                0           40001           seedlingcount
-  2                1           40002           tankvolume × 10  (ex: 956 = 95.6 L)
+  2                1           40002           agua_consumida em L (inteiro, ex: 5 = 5 L)
   3                2           40003           tractorspeed × 10 (ex: 52 = 5.2 km/h)
   4                3           40004           pll_sync_lost (0 ou 1)
   5                4           40005           pll_missed_count
@@ -109,9 +109,10 @@ class ModbusRTUServer:
         self._last_cmd_time = 0  # cooldown para evitar comando repetido
 
         # Callbacks injetados pelo app.py
-        self.on_start = None    # fn(**kwargs) inicia detector
-        self.on_stop = None     # fn() para detector
-        self.on_valve = None    # fn() aciona válvula manual
+        self.on_start   = None  # fn(**kwargs) inicia detector (zera contadores)
+        self.on_retomar = None  # fn(**kwargs) retoma detector (preserva contadores)
+        self.on_stop    = None  # fn() para detector
+        self.on_valve   = None  # fn() aciona válvula manual
         self.get_status = None  # fn() → dict com chave 'running'
 
     # ------------------------------------------------------------------ #
@@ -138,19 +139,21 @@ class ModbusRTUServer:
         if address != R_CMD or value == 0:
             return
 
-        # Cooldown de 3s para evitar re-disparo enquanto botão HMI está pressionado
-        now = time.time()
-        if now - self._last_cmd_time < 3.0:
-            self._set_reg(R_CMD, 0)
-            return
-        self._last_cmd_time = now
-
         print(f"[MODBUS] Comando recebido do HMI: {value}", flush=True)
 
-        if value == 1 and self.on_start:
+        # Cooldown de 3s apenas para INICIAR/PARAR (evita re-disparo com botão pressionado)
+        # IRRIGAR (value=3) não tem cooldown — resposta imediata
+        if value in (1, 2):
+            now = time.time()
+            if now - self._last_cmd_time < 3.0:
+                self._set_reg(R_CMD, 0)
+                return
+            self._last_cmd_time = now
+
+        if value in (1, 4):
             mode_idx = self._reg(R_MODE)
             mode = _MODES[mode_idx] if 0 <= mode_idx < len(_MODES) else 'balanced'
-            self.on_start(
+            kwargs = dict(
                 mode=mode,
                 sensitivity=str(self._reg(R_LIMIAR) / 100.0),
                 delay=str(self._reg(R_DELAY) / 1000.0),
@@ -159,6 +162,10 @@ class ModbusRTUServer:
                 volume_irrigacao=str(self._reg(R_VOLIRRG) / 10.0),
                 max_corr=str(self._reg(R_MAXCORR)),
             )
+            if value == 1 and self.on_start:
+                self.on_start(**kwargs)
+            elif value == 4 and self.on_retomar:
+                self.on_retomar(**kwargs)
 
         elif value == 2 and self.on_stop:
             self.on_stop()
@@ -186,8 +193,8 @@ class ModbusRTUServer:
                     running = 1 if self.get_status().get('running') else 0
 
                 self._set_reg(R_SEEDLING,   data.get('seedlingcount', 0))
-                self._set_reg(R_TANK,       data.get('tankvolume', 0) * 10)
-                self._set_reg(R_SPEED,      data.get('tractorspeed', 0.0) * 10)
+                self._set_reg(R_TANK,       data.get('agua_consumida', 0))
+                self._set_reg(R_SPEED,      data.get('tractorspeed', 0.0) * 100)
                 self._set_reg(R_PLL_LOST,   1 if data.get('pll_sync_lost') else 0)
                 self._set_reg(R_PLL_MISSED, data.get('pll_missed_count', 0))
                 self._set_reg(R_PLL_PERIOD, data.get('pll_period', 0) * 100)
@@ -243,7 +250,7 @@ class ModbusRTUServer:
         self._set_reg(R_MODE,      1)    # balanced
         self._set_reg(R_LIMIAR,   50)    # 0.50
         self._set_reg(R_DELAY,   100)    # 100ms
-        self._set_reg(R_DISTANCIA, 20)   # 2.0m
+        self._set_reg(R_DISTANCIA, 25)   # 2.5m
         self._set_reg(R_VOLTANQUE, 100)  # 100L
         self._set_reg(R_VOLIRRG,   50)   # 5.0L
         self._set_reg(R_MAXCORR,   20)   # 20%

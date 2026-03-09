@@ -14,12 +14,15 @@ cd /home/sergio/Linear
 
 # Na Raspberry Pi (diretório diferente!):
 cd ~/yolo
-source venv/bin/activate
+source py313env/bin/activate
 python app.py
-# Acesso: http://<IP>:5000
+# Acesso web local: http://192.168.1.1:5000  (Ethernet, câmera)
+# Acesso campo (hotspot): http://172.16.148.73:5000
 ```
 
 O `app.py` gerencia o `detector_unificado.py` como subprocesso. Não execute o detector diretamente em produção.
+
+O sistema é gerenciado pelo serviço systemd `irrigacao.service` (instalado em `/etc/systemd/system/`, enabled, auto-start no boot).
 
 ## File Structure
 
@@ -84,7 +87,9 @@ detector_unificado.py (subprocesso)
 - Timer dispara sem detecção → aciona válvula (1ª e 2ª falha); na 3ª falha consecutiva: para de acionar e sinaliza `pll_sync_lost = true`
 - Re-sincronização automática quando uma detecção real chega após perda de sincronismo
 - Velocidade calculada: `3.6 × distancia_media / period` (km/h)
-- Volume do tanque decrementado a cada acionamento da válvula
+- `agua_consumida` acumulado (começa em 0, incrementado a cada acionamento); substitui `tankvolume` do data.json
+- `manual_valve()` público no PLLController — chamado por valve_trigger e pelo Modbus (comando 3)
+- Comando 4 via Modbus = RETOMAR: chama `on_retomar` callback no app.py → reinicia detector preservando estado (seedlingcount, agua_consumida, pll_period)
 
 ## Parameters (passed via form → subprocess args)
 
@@ -93,21 +98,24 @@ detector_unificado.py (subprocesso)
 | `--mode` | balanced | fast / balanced / onnx / int8 |
 | `--limiar` | 0.5 | Confiança mínima de detecção |
 | `--delay` | 0.1s | Atraso entre detecção e acionamento da válvula |
-| `--distancia` | 2.0m | Distância média entre mudas |
-| `--volume_tanque` | 100L | Volume inicial do tanque |
+| `--distancia` | 2.5m | Distância média entre mudas |
 | `--volume_irrigacao` | 5L | Volume gasto por acionamento |
 | `--max_corr` | 20% | Variação máxima do período aceita por detecção (slew rate limiter) |
+| `--agua_consumida_inicial` | 0L | Água consumida acumulada inicial (para RETOMAR) |
+| `--seedlingcount_inicial` | 0 | Contagem inicial de mudas (para RETOMAR) |
+| `--pll_period_inicial` | 1.5s | Período inicial do PLL (para RETOMAR) |
 | `--roix/y/w/h` | 0 | ROI em pixels (calculada a partir da ROI normalizada salva) |
 | `--show` | off | Exibe janela OpenCV no terminal |
 
 ## Hardware
 
-- **Câmera:** Wanscam JW0004, IP `192.168.15.11` (WiFi, mesma rede do Pi), porta HTTP 81, **sem RTSP** — stream MJPEG over HTTP: `http://192.168.15.11:81/videostream.cgi?user=admin&pwd=` (senha vazia)
-- **Raspberry Pi:** IP `192.168.15.12`, diretório `~/yolo`, venv: `py313env`
+- **Câmera:** Hikvision DS-2CD1021G0-I, IP `192.168.1.64` (Ethernet eth0, rede dedicada), RTSP: `rtsp://192.168.1.64/...`
+- **Raspberry Pi:** eth0=`192.168.1.1/24` (câmera), wlan0=`172.16.148.73/24` (hotspot Shimura-cel), diretório `~/yolo`, venv: `py313env`
 - **GPIO:** chip 4 (Raspberry Pi 5), pino 17, válvula solenóide 200ms
 - **Fallback GPIO:** chip 0 se chip 4 falhar
 - **HMI:** WECON PI3070ig, 800×480, touch — software: PIStudio V9.5.9
 - **Serial:** conversor USB-RS232 em `/dev/ttyUSB0`, Modbus RTU slave ID=1, 9600 bps, 8-N-1
+- **Systemd:** `irrigacao.service` instalado em `/etc/systemd/system/`, enabled, auto-start no boot
 
 ## Modbus Register Map (Holding Registers)
 
@@ -118,18 +126,18 @@ Mapa correto (constantes em modbus_server.py, confirmado em produção):
 | Constante | Índice bloco | PDU | HMI | Descrição | Escala |
 |---|---|---|---|---|---|
 | R_SEEDLING | 2 | 1 | 40001 | seedlingcount | x1 |
-| R_TANK | 3 | 2 | 40002 | tankvolume | x10 |
-| R_SPEED | 4 | 3 | 40003 | tractorspeed | x10 |
+| R_TANK | 3 | 2 | 40002 | agua_consumida | x1 (raw litros) |
+| R_SPEED | 4 | 3 | 40003 | tractorspeed | x100 |
 | R_PLL_LOST | 5 | 4 | 40004 | pll_sync_lost | 0/1 |
 | R_PLL_MISSED | 6 | 5 | 40005 | pll_missed_count | x1 |
 | R_PLL_PERIOD | 7 | 6 | 40006 | pll_period | x100 |
 | R_RUNNING | 8 | 7 | 40007 | detector_running | 0/1 |
-| R_CMD | 12 | 11 | 40011 | comando (1=start, 2=stop, 3=válvula) | auto-reset 0 |
+| R_CMD | 12 | 11 | 40011 | comando (1=start, 2=stop, 3=válvula, 4=retomar) | auto-reset 0 |
 | R_MODE | 13 | 12 | 40012 | modo (0=fast,1=balanced,2=onnx,3=int8) | x1 |
 | R_LIMIAR | 14 | 13 | 40013 | limiar | x100 |
 | R_DELAY | 15 | 14 | 40014 | delay | ms |
-| R_DISTANCIA | 16 | 15 | 40015 | distancia | x10 |
-| R_VOLTANQUE | 17 | 16 | 40016 | volume_tanque | L |
+| R_DISTANCIA | 16 | 15 | 40015 | distancia | x10 (default 25 = 2.5m) |
+| R_VOLTANQUE | 17 | 16 | 40016 | volume_tanque (parâmetro inicial) | L |
 | R_VOLIRRG | 18 | 17 | 40017 | volume_irrigacao | x10 |
 | R_MAXCORR | 19 | 18 | 40018 | max_corr | % |
 
@@ -138,17 +146,31 @@ Mapa correto (constantes em modbus_server.py, confirmado em produção):
 ```json
 {
   "seedlingcount": 0,
-  "tankvolume": 100.0,
+  "agua_consumida": 0.0,
   "tractorspeed": 0.0,
   "pll_sync_lost": false,
   "pll_missed_count": 0,
-  "pll_period": 2.0,
+  "pll_period": 1.5,
   "framewidth": 640,
   "frameheight": 480
 }
 ```
 
+Nota: `tankvolume` foi substituído por `agua_consumida` (acumulador que começa em 0 e incrementa a cada acionamento de válvula). O campo `pll_period` default mudou de 2.0 para 1.5s (= 6 km/h com 2.5m entre mudas).
+
 ## Session History
+
+### Session 2026-03-08 (parte 4 — câmera Hikvision, agua_consumida, RETOMAR, systemd)
+- Phase: Sistema refatorado com nova câmera RTSP, acumulador de água e suporte a retomada de sessão; serviço systemd instalado
+- Accomplishments:
+  1. Câmera trocada: Wanscam JW0004 (MJPEG HTTP) → Hikvision DS-2CD1021G0-I (RTSP, 192.168.1.64); Pi eth0 = 192.168.1.1/24; wlan0 = 172.16.148.73/24 (hotspot campo)
+  2. detector_unificado.py: distancia default 2.0→2.5m; MIN_PERIOD 0.3→1.5s; tankvolume substituído por agua_consumida (acumulador, começa em 0); PLLController aceita agua_consumida_inicial, pll_period_inicial; seedlingcount inicializa de args.seedlingcount_inicial; manual_valve() público no PLLController; valve_trigger chama pll.manual_valve()
+  3. modbus_server.py: R_TANK lê agua_consumida (raw litros, sem ×10); R_SPEED: tractorspeed × 100 (HMI divisor 100); R_DISTANCIA default 20→25; cooldown 3s apenas para comandos 1 e 2 (não para IRRIGAR=3); comando 4 = RETOMAR com callback on_retomar
+  4. app.py: _increment_agua_consumida() para modo OFF; manual_valve e _do_valve incrementam agua_consumida; start_detector(resume=False/True): resume=True preserva seedlingcount, agua_consumida, pll_period; resume=False zera em data.json imediatamente; rota /retomar adicionada; on_retomar registrado no Modbus; args iniciais passados ao subprocesso
+  5. templates/index.html: "Tanque" → "Água Consumida", id tankvolume → agua_consumida
+  6. irrigacao.service criado e instalado na Pi (/etc/systemd/system/, enabled, auto-start no boot)
+- Key Decisions: agua_consumida como acumulador (começa em 0) é mais intuitivo para operador de campo que "volume restante do tanque"; MIN_PERIOD 1.5s evita disparos falsos em alta velocidade; resume=True permite retomar contagem após parada sem perder dados; cooldown removido para IRRIGAR (comando 3) pois operador precisa acionar multiple vezes; systemd garante auto-restart em caso de falha
+- Next Steps: Atualizar HMI no PIStudio: label 40002 de "Tanque" para "Agua Cons.", divisor 40003 de /10 para /100, adicionar botão RETOMAR (escreve 4 em 40011); fazer git pull na Pi e reiniciar serviço; teste de campo completo com câmera Hikvision e trator em movimento
 
 ### Session 2026-02-22 (parte 1)
 - Phase: Modbus RTU integration complete — awaiting PIStudio configuration and Raspberry Pi deploy

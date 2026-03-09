@@ -76,10 +76,13 @@ parser.add_argument('--roix', type=float, default=0.0, help='Coordenada X inicia
 parser.add_argument('--roiy', type=float, default=0.0, help='Coordenada Y inicial da ROI.')
 parser.add_argument('--roiw', type=float, default=0.0, help='Largura da ROI.')
 parser.add_argument('--roih', type=float, default=0.0, help='Altura da ROI.')
-parser.add_argument('--distancia', type=float, default=2.0, help='Distância média entre mudas em metros. Padrão 2.0')
+parser.add_argument('--distancia', type=float, default=2.5, help='Distância média entre mudas em metros. Padrão 2.5')
 parser.add_argument('--volume_tanque', type=float, default=100.0, help='Volume inicial do tanque em litros. Padrão 100')
 parser.add_argument('--volume_irrigacao', type=float, default=5.0, help='Volume gasto por irrigação em litros. Padrão 5')
 parser.add_argument('--max_corr', type=float, default=10.0, help='Limite máximo de correção do período do PLL por detecção, em %%. Padrão 10')
+parser.add_argument('--agua_consumida_inicial', type=float, default=0.0, help='Água consumida acumulada antes de iniciar (L). Padrão 0')
+parser.add_argument('--seedlingcount_inicial', type=int, default=0, help='Contagem de mudas acumulada antes de iniciar. Padrão 0')
+parser.add_argument('--pll_period_inicial', type=float, default=2.0, help='Período inicial do PLL em segundos. Padrão 2.0')
 args = parser.parse_args()
 print(f"DEBUG: Argumentos parseados {args}", flush=True)
 
@@ -93,21 +96,21 @@ else:
 
 # --- CONFIGURAÇÕES DA CÂMERA ---
 
-# -- Hikvision (câmera anterior) --
-# CAMIP = "192.168.1.64"
-# USER = "admin"
-# PASS = "$S559612s$"
-# PASSESC = PASS.replace('$', '%24')
-# RTSPMAIN = f"rtsp://{USER}:{PASSESC}@{CAMIP}/Streaming/Channels/101"
-# RTSPSUB  = f"rtsp://{USER}:{PASSESC}@{CAMIP}/Streaming/Channels/102"
-
-# -- Wanscam JW0004 (câmera atual) — MJPEG over HTTP (sem RTSP) --
-CAMIP = "192.168.15.11"
+# -- Hikvision DS-2CD1021G0-I — RTSP via ethernet direto na Pi --
+CAMIP = "192.168.1.64"
 USER = "admin"
-PASS = ""
-STREAMURL = f"http://{CAMIP}:81/videostream.cgi?user={USER}&pwd={PASS}"
-RTSPMAIN  = STREAMURL
-RTSPSUB   = STREAMURL
+PASS = "$S559612s$"
+PASSESC = PASS.replace('$', '%24')
+RTSPMAIN = f"rtsp://{USER}:{PASSESC}@{CAMIP}/Streaming/Channels/101"
+RTSPSUB  = f"rtsp://{USER}:{PASSESC}@{CAMIP}/Streaming/Channels/102"
+
+# -- Wanscam JW0004 (câmera anterior) — MJPEG over HTTP --
+# CAMIP = "192.168.15.10"
+# USER = "admin"
+# PASS = ""
+# STREAMURL = f"http://{CAMIP}:81/videostream.cgi?user={USER}&pwd={PASS}"
+# RTSPMAIN  = STREAMURL
+# RTSPSUB   = STREAMURL
 print("DEBUG: Configurações de câmera definidas.", flush=True)
 
 # --- GPIO E PARÂMETROS ---
@@ -242,19 +245,20 @@ class PLLController:
     Após 3 disparos consecutivos sem detecção real, sinaliza 'perda de sincronismo'.
     """
     ALPHA = 0.3       # Peso da nova amostra no filtro IIR do período
-    MIN_PERIOD = 0.3  # Período mínimo aceitável (segundos)
+    MIN_PERIOD = 1.5  # Período mínimo aceitável (segundos) — corresponde a 6 km/h com 2,5 m entre mudas
     MAX_PERIOD = 60.0 # Período máximo aceitável (segundos)
 
     def __init__(self, h, valve_pin, valve_delay, distancia_media=2.0,
-                 volume_tanque=100.0, volume_irrigacao=5.0, max_corr_pct=0.20):
+                 volume_tanque=100.0, volume_irrigacao=5.0, max_corr_pct=0.20,
+                 agua_consumida_inicial=0.0, pll_period_inicial=2.0):
         self.h = h
         self.valve_pin = valve_pin
         self.valve_delay = valve_delay
         self.distancia_media = distancia_media  # metros
-        self.tankvolume = volume_tanque
+        self.agua_consumida = agua_consumida_inicial
         self.volume_irrigacao = volume_irrigacao
         self.max_corr_pct = max_corr_pct  # fração máxima de correção por ciclo (ex: 0.20 = 20%)
-        self.period = 2.0       # estimativa inicial do período
+        self.period = pll_period_inicial
         self.missed_count = 0
         self.sync_lost = False
         self.active = False
@@ -345,11 +349,16 @@ class PLLController:
                 self._timer.start()
 
     def _trigger_valve(self):
-        """Decrementa o volume do tanque e agenda o acionamento da válvula.
+        """Incrementa a água consumida e agenda o acionamento da válvula.
         Deve ser chamado com self._lock já adquirido.
         """
-        self.tankvolume = max(0.0, self.tankvolume - self.volume_irrigacao)
+        self.agua_consumida += self.volume_irrigacao
         Timer(self.valve_delay, lambda: activate_valve(self.h, self.valve_pin)).start()
+
+    def manual_valve(self):
+        """Aciona a válvula manualmente e incrementa água consumida."""
+        with self._lock:
+            self._trigger_valve()
 
     def get_status(self):
         """Retorna o estado atual do PLL para a interface web."""
@@ -358,7 +367,7 @@ class PLLController:
                 'pll_sync_lost': self.sync_lost,
                 'pll_missed_count': self.missed_count,
                 'pll_period': round(self.period, 2),
-                'tankvolume': round(self.tankvolume, 2)
+                'agua_consumida': round(self.agua_consumida, 2)
             }
 
 
@@ -427,7 +436,7 @@ def run_detector(args):
 
     # --- VARIÁVEIS GLOBAIS ---
     framecounter = 0
-    seedlingcount = 0
+    seedlingcount = args.seedlingcount_inicial
     tractorspeed = 0.0
 
     # --- PLL ---
@@ -435,7 +444,9 @@ def run_detector(args):
                         distancia_media=args.distancia,
                         volume_tanque=args.volume_tanque,
                         volume_irrigacao=args.volume_irrigacao,
-                        max_corr_pct=args.max_corr / 100.0)
+                        max_corr_pct=args.max_corr / 100.0,
+                        agua_consumida_inicial=args.agua_consumida_inicial,
+                        pll_period_inicial=args.pll_period_inicial)
     pll.start()
 
     print("DEBUG: Entrando no loop principal...", flush=True)
@@ -566,7 +577,7 @@ def run_detector(args):
             pll_status = pll.get_status()
             data = {
                 'seedlingcount': seedlingcount,
-                'tankvolume': pll_status['tankvolume'],
+                'agua_consumida': pll_status['agua_consumida'],
                 'tractorspeed': tractorspeed,
                 'pll_sync_lost': pll_status['pll_sync_lost'],
                 'pll_missed_count': pll_status['pll_missed_count'],
@@ -581,6 +592,16 @@ def run_detector(args):
             
             save_data(data)
             print("DEBUG: Dados salvos em", DATAFILE, flush=True)
+
+            # Acionamento manual da válvula solicitado pelo app (HMI ou web com detector ON)
+            trigger_file = os.path.join(DATADIR, 'valve_trigger')
+            if os.path.exists(trigger_file):
+                try:
+                    os.remove(trigger_file)
+                    pll.manual_valve()
+                    print("INFO: Válvula acionada via trigger manual.", flush=True)
+                except Exception as e:
+                    print(f"ERRO: Falha no trigger manual da válvula: {e}", flush=True)
 
             # Salva o frame para a interface web
             cv2.imwrite(outputpath, outputframe)

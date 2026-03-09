@@ -38,8 +38,8 @@
 						<p id="seedlingcount">{{ data.get('seedlingcount', 0) }}</p>
 					</div>
 					<div class="data-item">
-						<p>Tanque</p>
-						<p id="tankvolume">{{ data.get('tankvolume', 100) }} L</p>
+						<p>Água Consumida</p>
+						<p id="agua_consumida">{{ data.get('agua_consumida', 0) }} L</p>
 					</div>
 					<div class="data-item">
 						<p>Velocidade</p>
@@ -310,7 +310,7 @@
 				.then(response => response.json())
 				.then(data => {
 					document.getElementById('seedlingcount').textContent = data.seedlingcount;
-					document.getElementById('tankvolume').textContent = data.tankvolume + ' L';
+					document.getElementById('agua_consumida').textContent = data.agua_consumida + ' L';
 					document.getElementById('tractorspeed').textContent = data.tractorspeed.toFixed(2) + ' km/h';
 
 					const status = data.detector_status;
