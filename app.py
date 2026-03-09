@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, jsonify
 import json
 import subprocess
 import os
+import sys
 import atexit
 import signal
 from modbus_server import ModbusRTUServer
@@ -89,7 +90,7 @@ def start_detector(mode='balanced', sensitivity='0.5', delay='0.1', show=False,
             json.dump(saved, f)
 
     command = [
-        "python3", "detector_unificado.py",
+        sys.executable, "detector_unificado.py",
         "--mode", mode,
         "--limiar", str(sensitivity),
         "--delay", str(delay),
@@ -307,7 +308,7 @@ def manual_valve_route():
             open(os.path.join(DATA_DIR, 'valve_trigger'), 'w').close()
             return jsonify({'status': 'success', 'message': 'Válvula ativada manualmente!'})
         result = subprocess.run(
-            ['python3', 'gpio_handler.py', 'on'],
+            [sys.executable, 'gpio_handler.py', 'on'],
             capture_output=True, timeout=5
         )
         if result.returncode == 0:
@@ -333,7 +334,7 @@ if __name__ == '__main__':
         if detector_status.get('running'):
             open(os.path.join(DATA_DIR, 'valve_trigger'), 'w').close()
         else:
-            result = subprocess.run(['python3', 'gpio_handler.py', 'on'], capture_output=True)
+            result = subprocess.run([sys.executable, 'gpio_handler.py', 'on'], capture_output=True)
             if result.returncode == 0:
                 _increment_agua_consumida()
     modbus.on_valve = _do_valve
