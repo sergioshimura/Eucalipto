@@ -6,6 +6,7 @@ print("DEBUG: Iniciando script...", flush=True)
 os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
+os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp'
 
 import cv2
 import time
