@@ -160,6 +160,17 @@ Nota: `tankvolume` foi substituído por `agua_consumida` (acumulador que começa
 
 ## Session History
 
+### Session 2026-03-09 (RTSP TCP e sys.executable)
+- Phase: Bugs de integração câmera/venv corrigidos — sistema funcional via systemd com câmera Hikvision H.264
+- Accomplishments:
+  1. Câmera Hikvision sem imagem na interface web — dois bugs identificados e corrigidos:
+     - `detector_unificado.py` linha 9: adicionado `os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp'` — OpenCV usava UDP por default, que falha com câmeras Hikvision em certas redes; TCP resolve o problema
+     - `app.py`: adicionado `import sys`; substituído `"python3"` por `sys.executable` nas 3 ocorrências que lançam subprocessos (detector e gpio_handler) — garante uso do venv py313env (com ultralytics/pymodbus) mesmo quando o processo pai é iniciado pelo systemd com outro Python
+  2. Git configurado na Raspberry Pi — Pi não tinha repositório git; configurado com `git init` + `git remote add origin` + `git fetch` + `git reset --hard origin/main`; futuros updates via `git pull`
+  3. Câmera funcionando: stream H.264 1920×1080 via RTSP `rtsp://192.168.1.64/...`; detector iniciando corretamente com ultralytics no venv
+- Key Decisions: RTSP over TCP é necessário para câmeras Hikvision (UDP pode perder pacotes e o stream não abre); `sys.executable` é a forma correta de garantir o venv correto ao lançar subprocessos em ambientes systemd onde `python3` pode apontar para o Python do sistema; git na Pi permite `git pull` para updates sem scp manual
+- Next Steps: Teste de campo completo com trator em movimento e mudas reais; calibrar parâmetros PLL com dados reais (distância, velocidade, delay); atualizar HMI no PIStudio: label 40002 → "Agua Cons.", divisor 40003 → /100, adicionar botão RETOMAR (escreve 4 em 40011)
+
 ### Session 2026-03-08 (parte 4 — câmera Hikvision, agua_consumida, RETOMAR, systemd)
 - Phase: Sistema refatorado com nova câmera RTSP, acumulador de água e suporte a retomada de sessão; serviço systemd instalado
 - Accomplishments:
